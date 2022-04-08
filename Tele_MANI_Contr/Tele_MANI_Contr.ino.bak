@@ -1,0 +1,223 @@
+#include <Wire.h>  // Only needed for Arduino 1.6.5 and earlier
+#include "Adafruit_GFX.h"
+#include "Adafruit_SH1106.h"
+#include "INA226.h"
+
+int buttonPin = 2;
+int relay_pin = 8;
+int buttonState = 0,lockState=0,RelsState = 0;
+int shutdown_time = 50; // 5sec
+int count = 0,delta;
+int mbut_lock = 3,mbut_rels = 4, motState = 3;
+int shutdown_cnt = 0; // shutdown time counter (delay must = 1)
+
+uint32_t timestamp_onoff = 0;
+uint32_t timestamp_display = 0;
+
+// displaydefine
+#define OLED_RESET 4
+Adafruit_SH1106 display(OLED_RESET);
+
+// acs712 current
+int sensitive = 666; // 30A 66
+// int sensitive = 100; // 20A
+int offset = 2500; // ค่าเริ่มต้น 2500 ปรับค่าตรงนี้เพื่อให้ค่ายังไม่มีโหลดเป็น 0.00
+
+//// bit resolution
+//// 0-1023 bit for bidirection / amplified
+//// 512 - 1023 for unamplified
+float I_range = 50; // I amp need 30-ACS712 50-ACS758
+float ADC_range = 899;// ADC work range, [512,1023]=512 -> unamplified, [125,1023]=899 -> ampV0, [0,1023]=1024 -> ampV-
+float resolute = I_range / ADC_range; // 10 bit ADC
+float ana_offset = 125; // 512
+
+//VoltageDivide Sense constant
+float resi_1 = 5100.0; // resistance in ohm
+float resi_2 = 1000.0;
+float v_multiply = (resi_1+resi_2)/ resi_2;
+float maxVrange = (resi_2 /resi_1) * 26.0; 
+
+//INA226
+INA226 INA(0x40);
+
+void setup()
+{ // pin
+  pinMode(relay_pin, OUTPUT); 
+  pinMode(buttonPin, INPUT);
+  //pinMode(mbut_ena, INPUT);
+  pinMode(mbut_lock, INPUT);
+  pinMode(mbut_rels, INPUT);
+  
+  Wire.begin();
+  if (!INA.begin() )
+  {Serial.println("could not connect. Fix and Reboot");}
+INA.setMaxCurrentShunt(1, 0.002);
+  
+  display.begin(SH1106_SWITCHCAPVCC, 0x3C);
+  
+  Serial.begin(115200);
+}
+
+int myfunc(int x){
+  static int buf1,buf,delta;
+  //buf2 = buf1;
+  buf1 = buf;
+  buf = x;
+  delta = x - buf1;
+  return delta;
+}
+
+// current filter
+float getCA() {
+   int count = 200;
+   float sum = 0;
+  for (int i = 0; i < count; i++) {
+    sum += getC();
+        }
+  float val = sum / count;
+  return val;
+}
+// current read
+float getC() {
+    float a = analogRead(A0);
+     float ct = resolute * (a - ana_offset);
+     // unamp = (50/512) * (a - 512)
+     // ampV0 = (50/(1024-125)) * (a-125)
+     // ampV- = (50/1024)* a;
+    return ct;}
+  
+float VoltageDivide(int avi){
+  float read_volt = maxVrange * (avi / 1024.0);
+  Serial.print("maaxvrt = ");Serial.println(read_volt);
+  return v_multiply * read_volt;
+}
+
+
+/////////loop///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void loop()
+{
+  buttonState = digitalRead(buttonPin);
+  lockState = digitalRead(mbut_lock);
+  RelsState = digitalRead(mbut_rels);
+  delta = myfunc(buttonState);
+  float currnt = getC();
+  int acrnt = analogRead(A0);
+  int avolt = analogRead(A1);
+  
+  //float bv = INA.getBusVoltage();
+  float sv = INA.getShuntVoltage_mV();
+  float cu = INA.getCurrent_mA();
+  float po = INA.getPower_mW();
+  float ifake = (sv / 100)*1000; //V/R100 , mA
+  
+  float volt_result = VoltageDivide(avolt);
+
+   
+
+  //Serial.print("current = "); Serial.println(currnt);
+
+  //DislayDrive
+  if (millis() - timestamp_display >= 10){
+  timestamp_display = millis(); 
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(5, 5);     //  range from left,range from up
+  display.println("I= ");
+  
+  display.setCursor(25, 5);
+  display.println(currnt); // , DEC
+  
+  display.setCursor(5, 15);
+  display.println("rwA0:");
+  display.setCursor(40, 15);
+  display.println(acrnt);
+  display.setCursor(65, 15);
+  display.println(int(acrnt-ana_offset));
+  
+  display.setCursor(0, 17);
+  display.println("_____________________");
+  
+  display.setCursor(5, 25);
+  display.println("Volt:"); // 
+  display.setCursor(40, 25);
+  display.println(volt_result); // 
+  display.setCursor(85, 25);
+  display.println(avolt); //
+  display.setCursor(115, 25);
+  display.println("V");
+  
+  display.setCursor(5, 35);
+  display.println("ShV:");
+  display.setCursor(40, 35);
+  display.println(sv); 
+  display.setCursor(115, 35);
+  display.println("mV");
+  
+  display.setCursor(5, 45);
+  display.println("Ish:");
+  display.setCursor(40, 45);
+  display.println(ifake); // cu
+  display.setCursor(115, 45);
+  display.println("mA");
+  
+  display.setCursor(5, 55);
+  display.println("Pwr:");
+  display.setCursor(40, 55);
+  display.println(po);
+  display.setCursor(115, 55);
+  display.println("mW");
+  
+  display.setCursor(105, 15);
+  display.println(shutdown_cnt);
+  
+  //display.setTextSize(2);
+  display.setCursor(115, 5);
+  display.println("A");
+  
+  display.display();
+    }
+
+  if (millis() - timestamp_onoff >= 25){//run every x msec  
+    timestamp_onoff = millis();
+    
+    switch (buttonState) {
+    default:
+    case 1:
+    digitalWrite(relay_pin, 1);
+    shutdown_cnt = 0;
+    break;
+    
+    case 0:
+    if (shutdown_cnt >= shutdown_time){
+      digitalWrite(relay_pin, 0);
+    }
+    else{ shutdown_cnt++; }
+    break;
+    }
+}
+  
+
+///////////// obsolete //  re state case later ////////////////
+/*
+  if (lockState == 1 && RelsState == 0){
+     motState = 1;
+     Serial.println("  Lock  ");
+    }
+  if (lockState == 0 && RelsState == 1){
+     motState = 2; 
+     Serial.println("  Release  ");
+    }
+   if (lockState == 1 && RelsState == 1){ 
+     motState = 3;
+      
+     Serial.println("  Enable  ");
+     delay(1500); // prevent button release unequality bug error
+    }
+    Serial.print(" = ");
+    Serial.println(motState);
+  */
+  ///////////// obsolete //  re state case later ////////////////
+  
+  //delay(1); // must = 1, link with shutdown cnt 
+}
