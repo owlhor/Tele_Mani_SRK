@@ -13,11 +13,11 @@
 #include "Adafruit_SH1106.h"
 
 int buttonPin = 2;
-int relay_pin = 9;
-int buttonState = 0,lockState=0,RelsState = 0;
+int relay_pin = 3;
+// 4 5 6 7 = button input/ 8 9 10 = LED out
+int buttonState = 0;
 
 int count = 0,delta;
-int mbut_lock = 3,mbut_rels = 4, motState = 3;
 
 int shutdown_cnt = 0; 							// shutdown time counter (delay must = 1)
 int shutdown_time = 50; 						// Define time gap before Jetson nano Shutdown here
@@ -36,15 +36,16 @@ Adafruit_SH1106 display(OLED_RESET);
 //// 0-1023 bit for bidirection / unidirection amplified
 //// 512 - 1023 for unidirection unamplified
 float I_range = 50; 						// I amp need 30-ACS712 50-ACS758
-float ADC_range = 899;						// ADC work range, [512,1023]=512 -> unamplified, 
-float resolute = I_range / ADC_range; 		// [125,1023]=899 -> opampV0, [0,1023]=1024 -> opampV-
-float ana_offset = 125; 					// 512
+float ADC_range = 1024;						// ADC work range, [512,1023]=512 -> unamplified, 
+											// [125,1023]=899 -> opampV0, [0,1023]=1024 -> opampV-
+float resolute = I_range / ADC_range; 		
+float ana_offset = 0; 						// 512, 125
 
 //VoltageDivide Sense constant
 float resi_1 = 5100.0; // resistance in ohm
 float resi_2 = 1000.0;
 float v_multiply = (resi_1+resi_2)/ resi_2;
-float maxVrange = (resi_2 /resi_1) * 26.0; 
+//float maxVrange = (resi_2 /resi_1) * 26.0; 
 
 
 void setup()
@@ -52,8 +53,8 @@ void setup()
   pinMode(relay_pin, OUTPUT); 
   pinMode(buttonPin, INPUT);
   //pinMode(mbut_ena, INPUT);
-  pinMode(mbut_lock, INPUT);
-  pinMode(mbut_rels, INPUT);
+  //pinMode(mbut_lock, INPUT);
+  //pinMode(mbut_rels, INPUT);
   
   display.begin(SH1106_SWITCHCAPVCC, 0x3C);
   
@@ -76,14 +77,14 @@ int myfunc(int x){
 float getC() {
     float a = analogRead(A0);
     float ct = resolute * (a - ana_offset);
-    // unamp = (50/512) * (a - 512)
-    // ampV0 = (50/(1024-125)) * (a-125)
-    // ampV- = (50/1024)* a;
+		// unamp = (50/512) * (a - 512)
+		// ampV0 = (50/(1024-125)) * (a - 125)
+		// ampV- = (50/1024)* a;
     return ct;}
   
 float VoltageDivide(int avi){
-  float read_volt = maxVrange * (avi / 1024.0);
-  Serial.print("maaxvrt = "); Serial.println(read_volt);
+  //xxfloat read_volt = maxVrange * (avi / 1024.0);
+  float read_volt = (avi+3) * (5.0/1024.0); // +3 to offset near meter measured
   return v_multiply * read_volt;
 }
 
@@ -91,9 +92,6 @@ float VoltageDivide(int avi){
 void loop()
 {
   buttonState = digitalRead(buttonPin);
-  lockState = digitalRead(mbut_lock);
-  RelsState = digitalRead(mbut_rels);
-  //delta = myfunc(buttonState);
   float currnt = getC();
   int acrnt = analogRead(A0);
   int avolt = analogRead(A1);
