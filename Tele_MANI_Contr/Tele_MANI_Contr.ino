@@ -6,26 +6,52 @@
  * written by owl_hor, FRAB7 FIBO KMUTT.
  * Academic Usage
  * ====================================================
+ * ------------OF-TMSRK-CT011 Pin Map------------------
+ * D2 <- R_sig	, Signal from ON/OFF button)
+ * D3 -> Rctr 	, Xternal Relay Control
+ * D4 <- I1 	, Button Input
+ * D5 <- I2 	, Button Input
+ * D6 <- I3 	, Button Input
+ * D7 <- I4 	, Button Input
+ * D8 -> L1		, LED-Pilot Lamp Drive
+ * D9 -> L2		, LED-Pilot Lamp Drive
+ * D10 -> L3	, LED-Pilot Lamp Drive
+ *
+ * A0 <- Acr	, Current Sense
+ * A1 <- Vsn	, Voltage Sense
+ *
+ * A4 -> SCLK	, SH1106 
+ * A5 <-> SDA	, SH1106
+  * ====================================================
  */
 
 #include <Wire.h>  // Only needed for Arduino 1.6.5 and earlier
 #include "Adafruit_GFX.h"
 #include "Adafruit_SH1106.h"
 
-int buttonPin = 2;
+int ONOFF_Pin = 2;
 int relay_pin = 3;
-// 4 5 6 7 = button input/ 8 9 10 = LED out
+// 4 5 6 7 = button input
+// 8 9 10 = LED out
+int Pilot_L1 = 8;
+int Pilot_L2 = 9;
+int Pilot_L3 = 10;
+
 int buttonState = 0;
 
-int count = 0,delta;
+int grand_cnt = 0; 								// multipurpose counter in GrandState
 
 int shutdown_cnt = 0; 							// shutdown time counter (delay must = 1)
 int shutdown_time = 50; 						// Define time gap before Jetson nano Shutdown here
 
-static enum {INIT,READY,WORKING,ERROR,LOCK} GrandState = INIT;
+static enum {OFF,INIT,ON,SHUTDOWN} GrandState = INIT;
+static enum {READY,STOP,WORKING,ERROR,EMERGENCY,NA} ActiveState = READY;
 
+char* StBuffer;
+ 
 uint32_t timestamp_onoff = 0;
 uint32_t timestamp_display = 0;
+uint32_t timestamp_grand = 0;
 
 // displaydefine
 #define OLED_RESET 4
@@ -51,10 +77,11 @@ float v_multiply = (resi_1+resi_2)/ resi_2;
 void setup()
 { // pin
   pinMode(relay_pin, OUTPUT); 
-  pinMode(buttonPin, INPUT);
-  //pinMode(mbut_ena, INPUT);
-  //pinMode(mbut_lock, INPUT);
-  //pinMode(mbut_rels, INPUT);
+  pinMode(ONOFF_Pin, INPUT);
+
+  pinMode(Pilot_L1, OUTPUT);
+  pinMode(Pilot_L2, OUTPUT);
+  pinMode(Pilot_L3, OUTPUT); 
   
   display.begin(SH1106_SWITCHCAPVCC, 0x3C);
   
@@ -91,7 +118,7 @@ float VoltageDivide(int avi){
 /////////loop///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void loop()
 {
-  buttonState = digitalRead(buttonPin);
+  buttonState = digitalRead(ONOFF_Pin);
   float currnt = getC();
   int acrnt = analogRead(A0);
   int avolt = analogRead(A1);
@@ -103,9 +130,11 @@ void loop()
   //Serial.print("current = "); Serial.println(currnt);
 
   //DislayDrive
-  if (millis() - timestamp_display >= 10){
+  if (millis() - timestamp_display >= 20){
   timestamp_display = millis(); 
+  
   display.clearDisplay();
+  
   display.setTextSize(1);
   display.setTextColor(WHITE);
   display.setCursor(5, 5);     //  range from left,range from up
@@ -132,39 +161,27 @@ void loop()
   display.println(avolt); //
   display.setCursor(115, 25);
   display.println("V");
-  /*
-  display.setCursor(5, 35);
-  display.println("ShV:");
-  display.setCursor(40, 35);
-  display.println(_____); 
-  display.setCursor(115, 35);
-  display.println("mV");
   
-  display.setCursor(5, 45);
-  display.println("Ish:");
-  display.setCursor(40, 45);
-  display.println(_____);
-  display.setCursor(115, 45);
-  display.println("mA");
-  
-  display.setCursor(5, 55);
-  display.println("Pwr:");
-  display.setCursor(40, 55);
-  display.println(_____);
-  display.setCursor(115, 55);
-  display.println("mW");
-  */
   display.setCursor(105, 15);
   display.println(shutdown_cnt);
   
-  //display.setTextSize(2);
   display.setCursor(115, 5);
   display.println("A");
+
+  display.setCursor(5, 45);
+  display.println("St:");
+  
+  display.setTextSize(2);
+  
+  display.setCursor(40, 45);
+  //char* buffzz = "555";
+  display.println(StBuffer); 
   
   display.display();
     }
 
 	// Btn Counter Driver
+	/*
   if (millis() - timestamp_onoff >= 25){//run every x msec  
     timestamp_onoff = millis();
     
@@ -182,6 +199,119 @@ void loop()
     else{ shutdown_cnt++; }
     break;
     }
-}
+}*/
   
+  // Grand State
+  if (millis()- timestamp_grand >= 100){
+	  timestamp_grand = millis();
+
+  //// Pilot Lamp Set
+	if (GrandState == ON){digitalWrite(Pilot_L1, 1);}
+	else{digitalWrite(Pilot_L1, 0);}
+	if (GrandState == INIT){digitalWrite(Pilot_L2, 1);}
+	else{digitalWrite(Pilot_L2, 0);}
+	if (GrandState == SHUTDOWN){digitalWrite(Pilot_L3, 1);}
+	else{digitalWrite(Pilot_L3, 0);}
+    
+	  switch (GrandState){
+		  default:
+		  case OFF://///////////////////////////////////////////////////////////////////////////////
+		  StBuffer = "OFF";
+     
+		  if (buttonState == 1){
+			  GrandState = INIT;
+			  digitalWrite(relay_pin, 1);  // Active Relay
+		  }
+		  break;
+		  
+		  case INIT:////////////////////////////////////////////////////////////////////////////////
+		  StBuffer = "INIT";
+      digitalWrite(relay_pin, 1);  // Active Relay
+		  if (grand_cnt >= 40) 		// Jetson nano are ready / dummy as 8 sec pass
+		  {
+			  GrandState = ON;
+			  ActiveState = READY;
+			  grand_cnt = 0; 		// reset counter
+			  shutdown_cnt = 0;
+		  }else{grand_cnt++;}
+
+     if (buttonState == 0){
+       GrandState = OFF;
+        digitalWrite(relay_pin, 0);  // Active Relay
+      }
+		  break;
+		  
+		  case ON://///////////////////////////////////////////////////////////////////////////////////
+		  StBuffer = "ON";
+		  if (buttonState == 0){
+			  GrandState = SHUTDOWN;
+			  ActiveState = NA;
+			  }
+				/*
+			  switch(ActiveState){
+				default:
+				case READY:
+				  if (){ // get order to work
+					  ActiveState = WORKING;
+				  }
+				  if (){ // get some error
+					  ActiveState = ERROR;
+				  }
+				  if (){ // get stop button
+					  ActiveState = STOP;
+				  }
+				  if (){ // get emer button
+					  ActiveState = EMERGENCY;
+				  }
+				  break;
+			  
+				case ERROR:
+				// report error & disable some order
+				// no exit, force to shutdown
+				break;
+				
+				case STOP:
+				// mobility stop for 2 sec and free
+				// maniP stop, release by button
+				if (){ //stop button is 0
+					ActiveState = READY;
+				}
+				break;
+				
+				case WORKING:
+				if (){ // get stop button
+					  ActiveState = STOP;
+				  }
+				break;
+				
+				case EMERGENCY:
+				// Order Jetson nano to reboot itself
+				if (){ // Release Emer button
+					GrandState = INIT;
+					ActiveState = NA;
+				}
+				break;
+				
+				case NA:
+				// nothing, not in any state, machine is on grandstate
+				break;
+				} 
+				*/
+		  break;
+		  
+		  case SHUTDOWN:
+		  StBuffer = "SHTDWN";
+		  shutdown_cnt++;
+		  if (shutdown_cnt >= shutdown_time ){ // || currnt < 1
+			  digitalWrite(relay_pin, 0);  // Deactive Relay
+			  GrandState = OFF;
+			  delay(20);
+		  }
+     if(buttonState == 1){
+      GrandState = ON;
+      shutdown_cnt = 0;}
+		  break;
+		  
+	  }
+  }
 }
