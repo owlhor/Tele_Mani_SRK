@@ -32,20 +32,22 @@
 int ONOFF_Pin = 2;
 int relay_pin = 3;
 // 4 5 6 7 = button input
+int emer_Pin = 5;
 // 8 9 10 = LED out
 int Pilot_L1 = 8;
 int Pilot_L2 = 9;
 int Pilot_L3 = 10;
 
 int buttonState = 0;
+int emerState = 0;
 
 int grand_cnt = 0; 								// multipurpose counter in GrandState
 
 int shutdown_cnt = 0; 							// shutdown time counter (delay must = 1)
 int shutdown_time = 50; 						// Define time gap before Jetson nano Shutdown here
 
-static enum {OFF,INIT,ON,SHUTDOWN} GrandState = INIT;
-static enum {READY,STOP,WORKING,ERROR,EMERGENCY,NA} ActiveState = READY;
+static enum {OFF,INIT,ON,SHUTDOWN,EMERGENCY} GrandState = INIT;
+static enum {READY,STOP,WORKING,ERROR,NA} ActiveState = READY;
 
 char* StBuffer;
  
@@ -119,6 +121,7 @@ float VoltageDivide(int avi){
 void loop()
 {
   buttonState = digitalRead(ONOFF_Pin);
+  emerState = digitalRead(emer_Pin);
   float currnt = getC();
   int acrnt = analogRead(A0);
   int avolt = analogRead(A1);
@@ -130,7 +133,7 @@ void loop()
   //Serial.print("current = "); Serial.println(currnt);
 
   //DislayDrive
-  if (millis() - timestamp_display >= 20){
+  if (millis() - timestamp_display >= 50){
   timestamp_display = millis(); 
   
   display.clearDisplay();
@@ -202,7 +205,7 @@ void loop()
 }*/
   
   // Grand State
-  if (millis()- timestamp_grand >= 100){
+  if (millis()- timestamp_grand >= 20){
 	  timestamp_grand = millis();
 
   //// Pilot Lamp Set
@@ -212,7 +215,10 @@ void loop()
 	else{digitalWrite(Pilot_L2, 0);}
 	if (GrandState == SHUTDOWN){digitalWrite(Pilot_L3, 1);}
 	else{digitalWrite(Pilot_L3, 0);}
-    
+	
+    /////// Emergency /////// Emergency /////// Emergency /////// Emergency
+	//if (emerState == 1){GrandState = EMERGENCY;}
+	
 	  switch (GrandState){
 		  default:
 		  case OFF://///////////////////////////////////////////////////////////////////////////////
@@ -239,6 +245,10 @@ void loop()
        GrandState = OFF;
         digitalWrite(relay_pin, 0);  // Active Relay
       }
+      if (emerState == 1){
+        GrandState = EMERGENCY;
+        grand_cnt = 0;
+        }
 		  break;
 		  
 		  case ON://///////////////////////////////////////////////////////////////////////////////////
@@ -247,6 +257,7 @@ void loop()
 			  GrandState = SHUTDOWN;
 			  ActiveState = NA;
 			  }
+       if (emerState == 1){GrandState = EMERGENCY;}
 				/*
 			  switch(ActiveState){
 				default:
@@ -284,13 +295,7 @@ void loop()
 				  }
 				break;
 				
-				case EMERGENCY:
-				// Order Jetson nano to reboot itself
-				if (){ // Release Emer button
-					GrandState = INIT;
-					ActiveState = NA;
-				}
-				break;
+				
 				
 				case NA:
 				// nothing, not in any state, machine is on grandstate
@@ -298,7 +303,16 @@ void loop()
 				} 
 				*/
 		  break;
-		  
+		  ///////////////////// EMER //////////////////////////////////////////////
+		  case EMERGENCY:
+				StBuffer = "EMER";
+				// Order Jetson nano to reboot itself
+				if (emerState == 0){ // Release Emer button
+					GrandState = INIT;
+					//ActiveState = NA;
+				}
+				break;
+		  /////////////////////////// Shutdown ////////////////////////////////////
 		  case SHUTDOWN:
 		  StBuffer = "SHTDWN";
 		  shutdown_cnt++;
