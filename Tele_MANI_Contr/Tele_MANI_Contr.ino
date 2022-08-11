@@ -14,7 +14,7 @@
  * D6 <- I3 	, Button Input
  * D7 <- I4 	, Button Input
  * D8 -> L1		, LED-Pilot Lamp Drive
- * D9 -> L2		, LED-Pilot Lamp Drive
+ * D9 -> L2		, LED-Pilot Lamp Drive & Turn ONOFF Jetson NANO Relay
  * D10 -> L3	, LED-Pilot Lamp Drive
  *
  * A0 <- Acr	, Current Sense
@@ -42,6 +42,7 @@ int buttonState = 0;
 int emerState = 0;
 
 int grand_cnt = 0; 								// multipurpose counter in GrandState
+int initsub_cnt =0;
 
 int shutdown_cnt = 0; 							// shutdown time counter (delay must = 1)
 int shutdown_time = 50; 						// Define time gap before Jetson nano Shutdown here
@@ -88,6 +89,7 @@ void setup()
   display.begin(SH1106_SWITCHCAPVCC, 0x3C);
   
   Serial.begin(115200);
+
 }
 
 // Edge Detect
@@ -127,8 +129,6 @@ void loop()
   int avolt = analogRead(A1);
   
   float volt_result = VoltageDivide(avolt);
-
-   
 
   //Serial.print("current = "); Serial.println(currnt);
 
@@ -211,14 +211,15 @@ void loop()
   //// Pilot Lamp Set
 	if (GrandState == ON){digitalWrite(Pilot_L1, 1);}
 	else{digitalWrite(Pilot_L1, 0);}
-	if (GrandState == INIT){digitalWrite(Pilot_L2, 1);}
+	if (GrandState == INIT){}
 	else{digitalWrite(Pilot_L2, 0);}
 	if (GrandState == SHUTDOWN){digitalWrite(Pilot_L3, 1);}
 	else{digitalWrite(Pilot_L3, 0);}
-	
+
+ // if (GrandState != INIT || GrandState != SHUTDOWN){digitalWrite(Pilot_L2, 0);}
+  
     /////// Emergency /////// Emergency /////// Emergency /////// Emergency
 	//if (emerState == 1){GrandState = EMERGENCY;}
-	
 	  switch (GrandState){
 		  default:
 		  case OFF://///////////////////////////////////////////////////////////////////////////////
@@ -232,20 +233,31 @@ void loop()
 		  
 		  case INIT:////////////////////////////////////////////////////////////////////////////////
 		  StBuffer = "INIT";
-      digitalWrite(relay_pin, 1);  // Active Relay
-		  if (grand_cnt >= 40) 		// Jetson nano are ready / dummy as 8 sec pass
+		  digitalWrite(relay_pin, 1);  // Active Relay
+		
+		// Jetson nano are ready / dummy as 8 sec pass
+		  
+		  //// RelayJS Mini Trig ON
+      if (grand_cnt <= 5) //  rising edge
+      { 
+      digitalWrite(Pilot_L2, 1);
+      }else{
+      digitalWrite(Pilot_L2, 0);
+      }
+      
+		  if (grand_cnt >= 40) 		
 		  {
 			  GrandState = ON;
 			  ActiveState = READY;
 			  grand_cnt = 0; 		// reset counter
 			  shutdown_cnt = 0;
 		  }else{grand_cnt++;}
-
-     if (buttonState == 0){
+		  
+		if (buttonState == 0){
        GrandState = OFF;
-        digitalWrite(relay_pin, 0);  // Active Relay
+        digitalWrite(relay_pin, 0);  // Deactive Relay
       }
-      if (emerState == 1){
+		if (emerState == 1){
         GrandState = EMERGENCY;
         grand_cnt = 0;
         }
@@ -316,8 +328,14 @@ void loop()
 		  case SHUTDOWN:
 		  StBuffer = "SHTDWN";
 		  shutdown_cnt++;
+		  
+		  //Drive relayJS to shutdowning 
+		  digitalWrite(Pilot_L2, 1);
+		  
 		  if (shutdown_cnt >= shutdown_time ){ // || currnt < 1
 			  digitalWrite(relay_pin, 0);  // Deactive Relay
+			  digitalWrite(Pilot_L2, 0);   //Drive relay to shutdowning 
+		  
 			  GrandState = OFF;
 			  delay(20);
 		  }
