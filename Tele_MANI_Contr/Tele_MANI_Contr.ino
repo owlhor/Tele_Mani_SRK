@@ -4,6 +4,7 @@
  * use Arduino Nano on OF-TMSRK-CT011 circuit Board 
  * Human Computer Interface Lab (HCI)
  * written by owl_hor, FRAB7 FIBO KMUTT.
+ * MQTT Interface by Suparach Intarasopa
  * Academic Usage
  * ====================================================
  * ------------OF-TMSRK-CT011 Pin Map------------------
@@ -11,10 +12,10 @@
  * D3 -> Rctr 	, Xternal Relay Control
  * D4 <- I1 	, Button Input
  * D5 <- I2 	, Button Input
- * D6 <- I3 	, Button Input
+ * D6 <- I3 	, Button Input / EMER
  * D7 <- I4 	, Button Input
  * D8 -> L1		, LED-Pilot Lamp Drive
- * D9 -> L2		, LED-Pilot Lamp Drive & Turn ONOFF Jetson NANO Relay
+ * D9 -> L2		, LED-Pilot Lamp Drive
  * D10 -> L3	, LED-Pilot Lamp Drive
  *
  * A0 <- Acr	, Current Sense
@@ -29,38 +30,58 @@
 #include "Adafruit_GFX.h"
 #include "Adafruit_SH1106.h"
 
+#define UIP_CONF_UDP 1
+#include <UIPEthernet.h>
+#include "PubSubClient.h"
+#define CLIENT_ID       "OK1"
+#define PUBLISH_DELAY   2000
+#define shutdown_time 50
+
+#define ONOFF_Pin 2
+#define relay_pin 3
+// 4 5 6 7 = button input
+#define emer_Pin 6
+// 8 9 10 = LED out
+#define Pilot_L1 8
+#define Pilot_L2 9
+#define Pilot_L3 10
+
+//String ip = "192.168.137.1";
+byte ip[] = {192, 168, 2, 100};
+byte mac[] = {0x34, 0x6F, 0x24, 0xBE, 0x8E, 0x77};
+
+/*
 int ONOFF_Pin = 2;
 int relay_pin = 3;
 // 4 5 6 7 = button input
-int emer_Pin = 5;
+int emer_Pin = 6;
 // 8 9 10 = LED out
 int Pilot_L1 = 8;
 int Pilot_L2 = 9;
 int Pilot_L3 = 10;
+*/
 
-int buttonState = 0;
-int emerState = 0;
+uint8_t buttonState = 0;
+uint8_t emerState = 0;
 
 int grand_cnt = 0; 								// multipurpose counter in GrandState
-int initsub_cnt =0;
 
-int shutdown_cnt = 0; 							// shutdown time counter (delay must = 1)
-int shutdown_time = 50; 						// Define time gap before Jetson nano Shutdown here
+uint8_t shutdown_cnt = 0; 							// shutdown time counter (delay must = 1)
+//int shutdown_time = 50; 						// Define time gap before Jetson nano Shutdown here
 
 static enum {OFF,INIT,ON,SHUTDOWN,EMERGENCY} GrandState = INIT;
-static enum {READY,STOP,WORKING,ERROR,NA} ActiveState = READY;
+//static enum {READY,STOP,WORKING,ERROR,NA} ActiveState = READY;
 
 char* StBuffer;
  
-uint32_t timestamp_onoff = 0;
 uint32_t timestamp_display = 0;
 uint32_t timestamp_grand = 0;
 
-// displaydefine
+// ----displaydefine----------------------------------------
 #define OLED_RESET 4
 Adafruit_SH1106 display(OLED_RESET);
 
-//// ACS758-------------------------------
+//// --------------ACS758----------------------------------------------------------------------------
 //// bit resolution 10 bit ADC
 //// 0-1023 bit for bidirection / unidirection amplified
 //// 512 - 1023 for unidirection unamplified
@@ -76,12 +97,16 @@ float resi_2 = 1000.0;
 float v_multiply = (resi_1+resi_2)/ resi_2;
 //float maxVrange = (resi_2 /resi_1) * 26.0; 
 
+//----------------------ENC28J60 MQTT ---------------------------------------------------------------
+EthernetClient ethClient;
+PubSubClient mqttClient;
+//long previousMillis;
 
+//-/-/-/-/-/-/-/-/- SETUP -/-/-/- SETUP -/-/-/- SETUP -/-/-/- SETUP -/-/-/- SETUP -/-/-/- SETUP 
 void setup()
 { // pin
   pinMode(relay_pin, OUTPUT); 
   pinMode(ONOFF_Pin, INPUT);
-
   pinMode(Pilot_L1, OUTPUT);
   pinMode(Pilot_L2, OUTPUT);
   pinMode(Pilot_L3, OUTPUT); 
@@ -90,21 +115,16 @@ void setup()
   
   Serial.begin(115200);
 
+  Ethernet.begin(mac,ip);
+  Serial.println("Ethernet OK");
+  // setup mqtt client
+  mqttClient.setClient(ethClient);
+  mqttClient.setServer("broker.hivemq.com", 1883);
+  //Serial.println("MQTT client configured");
+  //previousMillis = millis();
 }
 
-// Edge Detect
-/*
-int myfunc(int x){
-  static int buf1,buf,delta;
-  //buf2 = buf1;
-  buf1 = buf;
-  buf = x;
-  delta = x - buf1;
-  return delta;
-}*/
-
-
-// current read ACS758-------------------------------
+// --------current read ACS758-------------------------------
 float getC() {
     float a = analogRead(A0);
     float ct = resolute * (a - ana_offset);
@@ -119,14 +139,36 @@ float VoltageDivide(int avi){
   return v_multiply * read_volt;
 }
 
+///// ----------- MQTT --------------------------------
+void sendData() {
+  if (mqttClient.connect(CLIENT_ID)) {
+     //Serial.println("Send MQTT");
+     mqttClient.publish("telemm/stop","STOP");
+     }
+}
+
+char * deblank(char *str) {
+  char *out = str;
+  char *put = str;
+
+  for (; *str != '\0'; ++str) {
+    if (*str != ' ') {
+      *put++ = *str;
+    }
+  }
+  
+  *put = '\0';
+  return out;
+}
+
 /////////loop///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void loop()
 {
   buttonState = digitalRead(ONOFF_Pin);
   emerState = digitalRead(emer_Pin);
   float currnt = getC();
-  int acrnt = analogRead(A0);
-  int avolt = analogRead(A1);
+  uint16_t acrnt = analogRead(A0);
+  uint16_t avolt = analogRead(A1);
   
   float volt_result = VoltageDivide(avolt);
 
@@ -151,7 +193,7 @@ void loop()
   display.setCursor(40, 15);
   display.println(acrnt);
   display.setCursor(65, 15);
-  display.println(int(acrnt-ana_offset));
+  display.println(int( acrnt - ana_offset));
   
   display.setCursor(0, 17);
   display.println("_____________________");
@@ -183,7 +225,7 @@ void loop()
   display.display();
     }
 
-	// Btn Counter Driver
+	// Btn Counter
 	/*
   if (millis() - timestamp_onoff >= 25){//run every x msec  
     timestamp_onoff = millis();
@@ -204,22 +246,23 @@ void loop()
     }
 }*/
   
-  // Grand State
+  ///// ------------------- Grand State---------------------------------------------------------------------
   if (millis()- timestamp_grand >= 20){
 	  timestamp_grand = millis();
 
-  //// Pilot Lamp Set
+  //// Pilot Lamp Set-------------------------------------
 	if (GrandState == ON){digitalWrite(Pilot_L1, 1);}
 	else{digitalWrite(Pilot_L1, 0);}
-	if (GrandState == INIT){}
+	if (GrandState == INIT){digitalWrite(Pilot_L2, 1);}
 	else{digitalWrite(Pilot_L2, 0);}
 	if (GrandState == SHUTDOWN){digitalWrite(Pilot_L3, 1);}
 	else{digitalWrite(Pilot_L3, 0);}
-
- // if (GrandState != INIT || GrandState != SHUTDOWN){digitalWrite(Pilot_L2, 0);}
+  //// Pilot Lamp Set-------------------------------------
+  
   
     /////// Emergency /////// Emergency /////// Emergency /////// Emergency
-	//if (emerState == 1){GrandState = EMERGENCY;}
+	  //if (emerState == 1){GrandState = EMERGENCY;}
+  
 	  switch (GrandState){
 		  default:
 		  case OFF://///////////////////////////////////////////////////////////////////////////////
@@ -234,21 +277,13 @@ void loop()
 		  case INIT:////////////////////////////////////////////////////////////////////////////////
 		  StBuffer = "INIT";
 		  digitalWrite(relay_pin, 1);  // Active Relay
-		
+
+    
 		// Jetson nano are ready / dummy as 8 sec pass
-		  
-		  //// RelayJS Mini Trig ON
-      if (grand_cnt <= 5) //  rising edge
-      { 
-      digitalWrite(Pilot_L2, 1);
-      }else{
-      digitalWrite(Pilot_L2, 0);
-      }
-      
 		  if (grand_cnt >= 40) 		
 		  {
 			  GrandState = ON;
-			  ActiveState = READY;
+			  //ActiveState = READY;
 			  grand_cnt = 0; 		// reset counter
 			  shutdown_cnt = 0;
 		  }else{grand_cnt++;}
@@ -267,9 +302,14 @@ void loop()
 		  StBuffer = "ON";
 		  if (buttonState == 0){
 			  GrandState = SHUTDOWN;
-			  ActiveState = NA;
+        mqttClient.publish("telemm/shutdown","SHUTDOWN");
+			  //ActiveState = NA;
 			  }
-       if (emerState == 1){GrandState = EMERGENCY;}
+       
+       if (emerState == 1){
+        GrandState = EMERGENCY;
+        mqttClient.publish("telemm/stop","STOP"); //// 1 time publish
+        }
 				/*
 			  switch(ActiveState){
 				default:
@@ -306,8 +346,7 @@ void loop()
 					  ActiveState = STOP;
 				  }
 				break;
-				
-				
+
 				
 				case NA:
 				// nothing, not in any state, machine is on grandstate
@@ -318,7 +357,11 @@ void loop()
 		  ///////////////////// EMER //////////////////////////////////////////////
 		  case EMERGENCY:
 				StBuffer = "EMER";
-				// Order Jetson nano to reboot itself
+        
+				//------MQTT publish EMER continuously
+        //mqttClient.publish("telemm/stop","STOP");
+        //-----
+        
 				if (emerState == 0){ // Release Emer button
 					GrandState = INIT;
 					//ActiveState = NA;
@@ -328,14 +371,14 @@ void loop()
 		  case SHUTDOWN:
 		  StBuffer = "SHTDWN";
 		  shutdown_cnt++;
+
+        //------MQTT Publish Shutdown
+        //mqttClient.publish("telemm/shutdown","SHUTDOWN");
+        //-----
 		  
-		  //Drive relayJS to shutdowning 
-		  digitalWrite(Pilot_L2, 1);
-		  
-		  if (shutdown_cnt >= shutdown_time ){ // || currnt < 1
+		  if (shutdown_cnt >= 50 ){ // || currnt < 1  // shutdown_time
 			  digitalWrite(relay_pin, 0);  // Deactive Relay
-			  digitalWrite(Pilot_L2, 0);   //Drive relay to shutdowning 
-		  
+			 
 			  GrandState = OFF;
 			  delay(20);
 		  }
@@ -346,4 +389,14 @@ void loop()
 		  
 	  }
   }
+
+  /*
+  // Condition for stop or shutdown
+  if (millis() - previousMillis > PUBLISH_DELAY) {
+    Serial.println("Condition");
+    sendData();
+    previousMillis = millis();
+  }
+  mqttClient.loop();
+  */
 }
